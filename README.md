@@ -62,7 +62,7 @@ github_actions scan results:
 Passed checks: 16, Failed checks: 0, Skipped checks: 0
 
 failure;status=1
-
+```
 ## Remediation Sample
 Below is the remediated main.tf configuration addressing core security requirements:
 ```plain
