@@ -8,46 +8,20 @@ This repository demonstrates how to integrate automated security guardrails into
 
 ## Architecture Diagram
 
-+------------------+         +-------------------+         +-----------------------+
-| Local Developer  |         | GitHub Repository |         | GitHub Actions CI/CD  |
-|  (Terraform Code)|         |   (Main Branch)   |         |   (Runner Environment)|
-+--------+---------+         +---------+---------+         +-----------+-----------+
-|                             |                               |
-| 1. Git Push / PR            |                               |
-+---------------------------->+                               |
-| 2. Trigger Workflow                                         |
-+------------------------------------------------------------>+
-|
-| 3. Execute Checkov Scan
-v
-+-----------------------+
-|   Checkov Static      |
-|   Code Analysis       |
-+-----------+-----------+
-|
-+-------------------------+-------------------------+
-|                                                   |
-v                                                   v
-[ Infrastructure Scan ]                             [ Pipeline Scan ]
-main.tf                                   checkov.yml
-|                                                   |
-+-------------------------+-------------------------+
-|
-v
-+-----------------------+
-| Evaluates Guardrails  |
-+-----------+-----------+
-|
-+------------------+------------------+
-|                                     |
-(Failures Detected)                     (All Passed)
-|                                     |
-v                                     v
-+--------------------------+          +--------------------------+
-| Exit Code 1 (Build Fail) |          | Exit Code 0 (Build Pass) |
-| Block Deployment         |          | Safe to Provision        |
-+--------------------------+          +--------------------------+
-
+```mermaid
+flowchart TD
+    A[Local Developer<br/>Terraform Code] -->|1. Git Push / PR| B[GitHub Repository<br/>Main Branch]
+    B -->|2. Trigger Workflow| C[GitHub Actions Runner]
+    C -->|3. Execute Checkov| D[Checkov Static Analysis]
+    
+    D --> E[Infrastructure Scan<br/>main.tf]
+    D --> F[Pipeline Scan<br/>checkov.yml]
+    
+    E --> G{Evaluates Guardrails}
+    F --> G
+    
+    G -->|Failures Detected| H[Exit Code 1<br/>Build Failed / Blocked]
+    G -->|All Passed| I[Exit Code 0<br/>Build Passed / Safe]
 
 ---
 
@@ -88,3 +62,92 @@ github_actions scan results:
 Passed checks: 16, Failed checks: 0, Skipped checks: 0
 
 failure;status=1
+
+## Remediation Sample
+Below is the remediated main.tf configuration addressing core security requirements:
+```
+Terraform
+data "aws_caller_identity" "current" {}
+
+# KMS Key for S3 Bucket Encryption
+resource "aws_kms_key" "s3_key" {
+  description             = "KMS key for S3 bucket encryption"
+  deletion_window_in_days = 7
+  enable_key_rotation     = true # Fixes CKV_AWS_7
+
+  # Fixes CKV2_AWS_64: Explicit key policy
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "Enable IAM User Permissions"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# S3 Bucket Configuration
+resource "aws_s3_bucket" "dev_bucket" {
+  bucket = "devsecops-test-bucket"
+
+  # Inline skips for non-production development environments
+  #checkov:skip=CKV_AWS_144:Cross-region replication not required for dev environment
+  #checkov:skip=CKV2_AWS_62:Event notifications not needed for dev testing
+  #checkov:skip=CKV_AWS_18:Access logging omitted for local environment
+  #checkov:skip=CKV2_AWS_61:Lifecycle configuration omitted for dev environment
+}
+
+# Block S3 Public Access
+resource "aws_s3_bucket_public_access_block" "dev_bucket_pab" {
+  bucket                  = aws_s3_bucket.dev_bucket.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# S3 Versioning Configuration
+resource "aws_s3_bucket_versioning" "dev_bucket_versioning" {
+  bucket = aws_s3_bucket.dev_bucket.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# S3 Default Server-Side Encryption
+resource "aws_s3_bucket_server_side_encryption_configuration" "dev_bucket_encryption" {
+  bucket = aws_s3_bucket.dev_bucket.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      kms_master_key_id = aws_kms_key.s3_key.arn
+      sse_algorithm     = "aws:kms"
+    }
+  }
+}
+
+# Security Group Configuration
+resource "aws_security_group" "dev_sg" {
+  name        = "dev-server-sg"
+  description = "Security group for local development testing"
+
+  ingress {
+    description = "Allow internal HTTP access"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["10.0.0.0/16"]
+  }
+}
+```
+## Local Usage & Testing
+To execute Checkov locally using Docker prior to pushing code:
+
+Bash
+docker run --rm -v "$(pwd):/tf" bridgecrew/checkov -d /tf
