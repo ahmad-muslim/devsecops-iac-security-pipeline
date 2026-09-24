@@ -22,7 +22,7 @@ flowchart TD
     
     G -->|Failures Detected| H[Exit Code 1<br/>Build Failed / Blocked]
     G -->|All Passed| I[Exit Code 0<br/>Build Passed / Safe]
-
+```
 ---
 
 ## Sample Failure Output
@@ -65,7 +65,7 @@ failure;status=1
 
 ## Remediation Sample
 Below is the remediated main.tf configuration addressing core security requirements:
-```
+```plain
 Terraform
 data "aws_caller_identity" "current" {}
 
